@@ -1,14 +1,15 @@
-CREATE OR REPLACE FUNCTION tm_kmeans (table_name TEXT, cols TEXT[], id TEXT, n_clusters INT)
-RETURNS SETOF TEXT[]
+CREATE OR REPLACE FUNCTION tm_kmeans (table_name TEXT, cols TEXT[], geom TEXT, n_clusters INT)
+RETURNS TEXT
 AS 
 $$
 import numpy as np
 from sklearn.cluster import KMeans
 import sklearn.preprocessing as preprocessing
+from plpy import spiexceptions
 
 a = [table_name]
 b = cols
-c = [id]
+c = [geom]
 
 myList = []
 
@@ -21,15 +22,14 @@ for t in b:
 queryLine = [", ".join(queryLine)]
 queryPlaceholder = tuple(c+queryLine+a)
 
-query = plpy.execute("SELECT %s, %s FROM %s"%queryPlaceholder)
-plpy.notice("SELECT %s, %s FROM %s"%queryPlaceholder)
+query = plpy.execute("SELECT ST_AsText(%s) as g, %s FROM %s"%queryPlaceholder)
+plpy.notice("SELECT ST_AsText(%s) as g, %s FROM %s"%queryPlaceholder)
 
 for col in cols:
     colVals = [i[col] for i in query]
     myList.append(colVals)
 
-dfPK = [str(x[id]) for x in query]
-plpy.notice(dfPK)
+geomCol = [x['g'] for x in query]
 
 df = np.array(myList,dtype=object)
 df = np.transpose(df)
@@ -40,10 +40,14 @@ plpy.notice(df.shape)
 dbkmeans = KMeans(n_clusters=n_clusters, init="k-means++", n_init=10, max_iter=300, tol=0.0001, precompute_distances="auto", verbose=0, random_state=None, copy_x=True, n_jobs=1)
 km = dbkmeans.fit_predict(df)
 
-res = np.array([dfPK,km],dtype=object)
-res = np.transpose(res)
-plpy.notice(res)
+tab = plpy.execute('SELECT * FROM %s'%table_name)
+if 'km_lbl' not in tab.colnames():
+	plpy.execute('ALTER TABLE %s ADD COLUMN km_lbl INT'%table_name)
 
-return res
+plan = plpy.prepare('UPDATE %s SET km_lbl = $1 WHERE ST_AsText(%s) = $2'%(table_name,geom),['int','text'])
+plpy.notice('UPDATE %s SET km_lbl = $1 WHERE ST_AsText(%s) = $2'%(table_name,geom))
+plpy.execute(plan, [km,geomCol])
+
+return 'column created and table updated!!!!!'
 $$
 LANGUAGE plpython2u;
