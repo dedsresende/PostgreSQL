@@ -1,6 +1,10 @@
+--First step is to create a data type as a multi column table which the columns are the geometry column and the k-means label column
+CREATE TYPE kmeans_table AS (geom GEOMETRY, km_lbl TEXT);
+
+--Function
 CREATE OR REPLACE FUNCTION tm_kmeans (table_name TEXT, cols TEXT[], geom TEXT, n_clusters INT)
 
-RETURNS TEXT
+RETURNS SETOF kmeans_table
 AS 
 $$
 --Used libraries
@@ -24,8 +28,8 @@ for t in b:
 queryLine = [", ".join(queryLine)]
 queryPlaceholder = tuple(c+queryLine+a)
 
-query = plpy.execute("SELECT ST_AsText(%s) as g, %s FROM %s"%queryPlaceholder)
-plpy.notice("SELECT ST_AsText(%s) as g, %s FROM %s"%queryPlaceholder)
+query = plpy.execute("SELECT %s as g, %s FROM %s"%queryPlaceholder)
+plpy.notice("SELECT %s as g, %s FROM %s"%queryPlaceholder)
 
 --Build array and running the cluster algorithm
 for col in cols:
@@ -42,20 +46,9 @@ plpy.notice(df.shape)
 dbkmeans = KMeans(n_clusters=n_clusters, init="k-means++", n_init=10, max_iter=300, tol=0.0001, precompute_distances="auto", verbose=0, random_state=None, copy_x=True, n_jobs=1)
 km = dbkmeans.fit_predict(df)
 
---Build update query using geometry as text as anchor for the kmeans label column merge
-tab = plpy.execute('SELECT * FROM %s'%table_name)
-if 'km_lbl' not in tab.colnames():
-	plpy.execute('ALTER TABLE %s ADD COLUMN km_lbl TEXT'%table_name)
-
-res = np.array([geomCol,km],dtype=object)
-res = np.transpose(res)
-
-plan = plpy.prepare('UPDATE %s SET km_lbl = $1 WHERE ST_AsText(%s) = $2'%(table_name,geom), ["text", "text"])
-plpy.execute(plan, [res[1], res[0]])
-
-ret_message = 'km_lbl updated with %s clusters at %s'%(n_clusters,table_name)
-return ret_message
-plpy.notice(ret_message)
+--This line can make the code slower but is the one the guarantees the code to return a table and not a single row
+for g, k in zip(geomCol, km):
+    yield (g, k)
 
 $$
 LANGUAGE plpython2u;
